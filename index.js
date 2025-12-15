@@ -1,28 +1,36 @@
-// 1. Importar as ferramentas
 import express from "express";
 import fetch from "node-fetch";
 import FormData from "form-data";
 import dotenv from "dotenv";
+import bodyParser from "body-parser";
+import path from "path";
+import { fileURLToPath } from "url";
 
-// 2. Ler o arquivo .env
 dotenv.config();
 
-// 3. Criar o servidor
 const app = express();
 app.use(express.json());
+app.use(bodyParser.urlencoded({ extended: false }));
+app.use(express.static("public"));
 
-// 4. Pegar a chave da OpenAI
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const OPENAI_KEY = process.env.OPENAI_API_KEY;
 
-// 5. Rota principal (teste)
-app.get("/", (req, res) => {
-  res.send("Backend da Secretaria Inteligente está rodando 🚀");
-});
+// ===============================
+// ESTADO
+// ===============================
+let filterEnabled = true;
+let silentHours = { start: 22, end: 8 };
+let calls = [];
 
-// 6. Função que envia áudio pra OpenAI e vira texto
-async function transcreverAudio(urlDoAudio) {
-  const resposta = await fetch(urlDoAudio);
-  const buffer = await resposta.arrayBuffer();
+// ===============================
+// IA – TRANSCRIÇÃO
+// ===============================
+async function transcreverAudio(url) {
+  const audio = await fetch(url);
+  const buffer = await audio.arrayBuffer();
 
   const form = new FormData();
   form.append("file", Buffer.from(buffer), "audio.wav");
@@ -41,8 +49,10 @@ async function transcreverAudio(urlDoAudio) {
   return data.text;
 }
 
-// 7. Função que classifica o texto
-async function classificarTexto(texto) {
+// ===============================
+// IA – DECISÃO
+// ===============================
+async function decidir(texto) {
   const r = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -51,44 +61,111 @@ async function classificarTexto(texto) {
     },
     body: JSON.stringify({
       model: "gpt-4o-mini",
+      temperature: 0,
       messages: [
         {
-          role: "user",
-          content: `Classifique esta mensagem como Urgente, Normal ou Spam:\n\n${texto}`
-        }
-      ],
-      temperature: 0
+          role: "system",
+          content:
+            "Classifique a ligação como URGENTE, NORMAL ou SPAM. Responda apenas uma palavra."
+        },
+        { role: "user", content: texto }
+      ]
     })
   });
 
   const data = await r.json();
-  return data.choices[0].message.content;
+  return data.choices[0].message.content.trim();
 }
 
-// 8. Endpoint que recebe o áudio
-app.post("/processar", async (req, res) => {
-  try {
-    const { audio_url } = req.body;
-
-    if (!audio_url) {
-      return res.status(400).json({ erro: "audio_url não enviado" });
-    }
-
-    const texto = await transcreverAudio(audio_url);
-    const classificacao = await classificarTexto(texto);
-
-    res.json({
-      texto,
-      classificacao
-    });
-
-  } catch (erro) {
-    res.status(500).json({ erro: erro.message });
+// ===============================
+// HORÁRIO SILENCIOSO
+// ===============================
+function estaEmHorarioSilencioso() {
+  const hora = new Date().getHours();
+  if (silentHours.start < silentHours.end) {
+    return hora >= silentHours.start && hora < silentHours.end;
   }
+  return hora >= silentHours.start || hora < silentHours.end;
+}
+
+// ===============================
+// TWILIO
+// ===============================
+app.post("/voice", async (req, res) => {
+  const from = req.body.From;
+  const audioUrl = req.body.RecordingUrl;
+
+  if (!filterEnabled || !audioUrl) {
+    return responder(res, "passar");
+  }
+
+  if (estaEmHorarioSilencioso()) {
+    return responder(res, "bloquear");
+  }
+
+  const texto = await transcreverAudio(audioUrl);
+  const decisao = await decidir(texto);
+
+  calls.unshift({
+    from,
+    texto,
+    decisao,
+    time: new Date().toLocaleString()
+  });
+
+  if (decisao === "URGENTE") return responder(res, "passar");
+  if (decisao === "NORMAL") return responder(res, "recado");
+  return responder(res, "bloquear");
 });
 
-// 9. Iniciar o servidor
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("Servidor rodando na porta", PORT);
+// ===============================
+// TWIML
+// ===============================
+function responder(res, tipo) {
+  let xml = "";
+
+  if (tipo === "passar") {
+    xml = `
+    <Response>
+      <Say language="pt-BR">Ligação importante. Transferindo.</Say>
+      <Dial>+SEU_NUMERO</Dial>
+    </Response>`;
+  }
+
+  if (tipo === "recado") {
+    xml = `
+    <Response>
+      <Say language="pt-BR">Deixe seu recado.</Say>
+      <Record maxLength="30"/>
+    </Response>`;
+  }
+
+  if (tipo === "bloquear") {
+    xml = `
+    <Response>
+      <Say language="pt-BR">No momento não atendemos chamadas.</Say>
+      <Hangup/>
+    </Response>`;
+  }
+
+  res.type("text/xml").send(xml);
+}
+
+// ===============================
+// API PARA FRONTEND
+// ===============================
+app.get("/calls", (req, res) => res.json(calls));
+
+app.post("/silent-hours", (req, res) => {
+  silentHours = req.body;
+  res.sendStatus(200);
 });
+
+app.get("/", (req, res) =>
+  res.sendFile(path.join(__dirname, "public/index.html"))
+);
+
+// ===============================
+app.listen(3000, () =>
+  console.log("🚀 Secretária IA rodando na porta 3000")
+);

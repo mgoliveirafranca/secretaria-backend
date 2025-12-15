@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Secretária Inteligente</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <h1>📞 Secretária Inteligente</h1>
+
+  <div class="card">
+    <h2>Filtro de chamadas</h2>
+
+    <label class="switch">
+      <input type="checkbox" id="filterToggle">
+      <span class="slider"></span>
+    </label>
+
+    <p id="status">Filtro desligado</p>
+  </div>
+
+  <div class="card">
+    <h2>Horário de silêncio</h2>
+
+    <label>Início:</label>
+    <input type="time" id="startTime">
+
+    <label>Fim:</label>
+    <input type="time" id="endTime">
+
+    <button onclick="saveSchedule()">Salvar horário</button>
+  </div>
+
+  <div class="card">
+    <h2>Chamadas recentes</h2>
+    <ul id="callsList"></ul>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
